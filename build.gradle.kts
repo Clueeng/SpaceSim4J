@@ -1,5 +1,7 @@
 plugins {
     id("java")
+    application
+    id("com.github.johnrengelman.shadow") version "8.1.1"
 }
 
 group = "net.flaily"
@@ -10,27 +12,22 @@ repositories {
 }
 
 val lwjglVersion = "3.3.3"
-val lwjglNatives = "natives-windows" // Change to: natives-linux / natives-macos if needed
 val imguiVersion = "1.86.11"
+val lwjglModules = listOf("lwjgl", "lwjgl-glfw", "lwjgl-opengl", "lwjgl-stb")
+val nativeClassifiers = listOf("natives-windows", "natives-linux", "natives-macos")
 
 dependencies {
     testImplementation(platform("org.junit:junit-bom:5.10.0"))
     testImplementation("org.junit.jupiter:junit-jupiter")
-    // LWJGL Core
-    implementation("org.lwjgl:lwjgl:$lwjglVersion")
-    runtimeOnly("org.lwjgl:lwjgl::$lwjglNatives")
 
-    // GLFW (for window/input/context)
-    implementation("org.lwjgl:lwjgl-glfw:$lwjglVersion")
-    runtimeOnly("org.lwjgl:lwjgl-glfw::$lwjglNatives")
+    // LWJGL Modules + Natives for every OS
+    lwjglModules.forEach { module ->
+        implementation("org.lwjgl:$module:$lwjglVersion")
 
-    // OpenGL bindings
-    implementation("org.lwjgl:lwjgl-opengl:$lwjglVersion")
-    runtimeOnly("org.lwjgl:lwjgl-opengl::$lwjglNatives")
-
-    // stb (for image loading)
-    implementation("org.lwjgl:lwjgl-stb:$lwjglVersion")
-    runtimeOnly("org.lwjgl:lwjgl-stb::$lwjglNatives")
+        nativeClassifiers.forEach { classifier ->
+            runtimeOnly("org.lwjgl:$module:$lwjglVersion:$classifier")
+        }
+    }
 
     // JOML - Math library for 3D
     implementation("org.joml:joml:1.10.5")
@@ -46,8 +43,16 @@ dependencies {
     implementation("io.github.spair:imgui-java-binding:$imguiVersion")
     implementation("io.github.spair:imgui-java-lwjgl3:$imguiVersion")
     runtimeOnly("io.github.spair:imgui-java-lwjgl3:$imguiVersion")
-    implementation("io.github.spair:imgui-java-natives-windows:$imguiVersion")
+    // implementation("io.github.spair:imgui-java-natives-windows:$imguiVersion")
+
+    listOf("windows", "linux", "macos").forEach { os ->
+        runtimeOnly("io.github.spair:imgui-java-natives-$os:$imguiVersion")
+    }
 }
 tasks.test {
     useJUnitPlatform()
+}
+
+application{
+    mainClass.set("net.flaily.Main")
 }

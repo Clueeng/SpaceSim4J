@@ -31,8 +31,8 @@ public class ChatBar {
     private int cursorPos = 0;
     private long backspacePressedTime = 0;
     private boolean backspaceHeld = false;
-    private static final long BACKSPACE_REPEAT_DELAY = 400;
-    private static final long BACKSPACE_REPEAT_INTERVAL = 50;
+    private static final short BACKSPACE_REPEAT_DELAY = 400;
+    private static final short BACKSPACE_REPEAT_INTERVAL = 50;
     private long lastBackspaceRepeat = 0;
 
 
@@ -95,6 +95,9 @@ public class ChatBar {
             m.updateOpacity();
         }
         glDisable(GL_BLEND);
+
+        // Clear the list of hidden messages
+        messageList.removeIf(m -> m.opacity <= 0.01f);
     }
     private void renderChatField(int width, int height){
         // if(!focused) return;
@@ -146,7 +149,6 @@ public class ChatBar {
 
 
         String beforeCursor = message.substring(0, cursorPos);
-        String afterCursor = message.substring(cursorPos);
         float cursorXOffset = Text.getTextWidth2(beforeCursor, scale);
         cursorXOffset += getTrailingSpacesWidth(beforeCursor, scale);
 
@@ -174,36 +176,6 @@ public class ChatBar {
     }
 
     int historyIndex;
-//    public void handleKeyPress(int key, int scancode, int action, int mods) {
-//        if(key == KEY_TOGGLE && action == GLFW.GLFW_PRESS && !focused){
-//            focused = true;
-//        }
-//
-//        if (!focused || action != GLFW.GLFW_PRESS) return;
-//
-//        if(key == GLFW.GLFW_KEY_UP) {
-//            historyIndex++;
-//            int search = messageList.size() - historyIndex - 1;
-//            try{
-//                this.message = new StringBuilder(messageList.get(search).text);
-//            }catch (IndexOutOfBoundsException e){
-//                System.out.println("lol");
-//            }
-//        }
-//
-//        if (key == GLFW.GLFW_KEY_BACKSPACE && !message.isEmpty()) {
-//            message.deleteCharAt(message.length() - 1);
-//        } if(key == GLFW.GLFW_KEY_ENTER && !message.isEmpty()){
-//            // send command and add to chat
-//            messageList.add(new Message(message.toString()));
-//            evaluateCommand(message.toString());
-//            message.delete(0, message.length());
-//            historyIndex = 0;
-//        }
-//        else if (key >= 32 && key <= 126) {
-//            //message.append((char) key);
-//        }
-//    }
     public void handleKeyPress(int key, int scancode, int action, int mods) {
         if (key == KEY_TOGGLE && action == GLFW.GLFW_PRESS && !focused) {
             focused = true;
@@ -278,17 +250,22 @@ public class ChatBar {
     }
     private int findPrevWord(int pos) {
         if (pos == 0) return 0;
-        pos--;
-        while (pos > 0 && Character.isWhitespace(message.charAt(pos))) pos--;
-        while (pos > 0 && !Character.isWhitespace(message.charAt(pos - 1))) pos--;
+        do pos--;
+        while (pos > 0 && Character.isWhitespace(message.charAt(pos)));
+
+        do pos--;
+        while (pos > 0 && !Character.isWhitespace(message.charAt(pos - 1)));
         return pos;
     }
 
     private int findNextWord(int pos) {
         int len = message.length();
         if (pos >= len) return len;
-        while (pos < len && !Character.isWhitespace(message.charAt(pos))) pos++;
-        while (pos < len && Character.isWhitespace(message.charAt(pos))) pos++;
+        do pos++;
+        while (pos < len && !Character.isWhitespace(message.charAt(pos)));
+
+        do pos++;
+        while (pos < len && Character.isWhitespace(message.charAt(pos)));
         return pos;
     }
 
