@@ -16,8 +16,6 @@ public class Slider extends UIElement {
 
     @Override
     public void render() {
-        System.out.println("its rendering");
-
         glColor3f(0.4f, 0.4f, 0.4f);
         glBegin(GL_QUADS);
         glVertex2f(x, y + height / 2 - 2);

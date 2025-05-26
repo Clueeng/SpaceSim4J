@@ -1,15 +1,22 @@
 package net.flaily;
+import imgui.ImGui;
+import imgui.ImGuiIO;
+import imgui.ImVec2;
+import imgui.gl3.ImGuiImplGl3;
+import imgui.glfw.ImGuiImplGlfw;
+import imgui.type.ImFloat;
+import net.flaily.chat.ChatBar;
 import net.flaily.objects.MathHelper;
-import net.flaily.objects.Physics;
 import net.flaily.objects.Planet;
 import net.flaily.ui.Slider;
 import net.flaily.ui.UIManager;
+import net.flaily.util.ShaderUtils;
 import net.flaily.util.Text;
 import org.lwjgl.*;
 import org.lwjgl.glfw.*;
 import org.lwjgl.opengl.*;
-import org.lwjgl.stb.STBEasyFont;
 import org.lwjgl.system.*;
+
 
 import java.nio.*;
 import java.util.ArrayList;
@@ -19,12 +26,14 @@ import static net.flaily.util.Text.*;
 import static org.lwjgl.glfw.Callbacks.*;
 import static org.lwjgl.glfw.GLFW.*;
 import static org.lwjgl.opengl.GL11.*;
+import static org.lwjgl.opengl.GL20.*;
 import static org.lwjgl.system.MemoryStack.*;
 import static org.lwjgl.system.MemoryUtil.*;
 
 public class SpaceApp {
 
     public long windowHandle = -1L;
+
 
     private UIManager uiManager = new UIManager();
     private final int WINDOW_WIDTH = 640, WINDOW_HEIGHT = 420;
@@ -35,14 +44,25 @@ public class SpaceApp {
     public float zoom = .005f;
     public int windowWidth = WINDOW_WIDTH;
     public int windowHeight = WINDOW_HEIGHT;
+    private ChatBar chatBar = new ChatBar(windowWidth, windowHeight, this);
     private float CAMERA_SPEED = 0.1f;
     private float ZOOM_SPEED = 0.25f;
+
+    ImVec2 currentWindowPos = new ImVec2(0, 0);
+    ImVec2 currentWindowSize = new ImVec2(10, 10);
+
+    private boolean grabbingPlanet;
+
+    public boolean following;
+
+    int backgroundShaderID = -1;
+    long startTime = System.nanoTime();
 
     // UI stuff for later
     private boolean menuOpen = false;
 
-    private float timeScale = 1.0f;
-    private Planet selectedPlanet = null;
+    public float timeScale = 1.0f, oldTimeScale = 1.0f;
+    public Planet selectedPlanet = null;
     private boolean addingPlanetMode = false;
     private float newPlanetMass = 1e6f;
     private float newPlanetRadius = 100f;
@@ -74,6 +94,18 @@ public class SpaceApp {
          */
         GL.createCapabilities();
         glLoadIdentity();
+
+        // Setting up ImGUI
+        ImGui.createContext();
+        ImGuiIO io = ImGui.getIO();
+        io.setIniFilename(null);
+
+        ImGuiImplGlfw imGuiGlfw = new ImGuiImplGlfw();
+        ImGuiImplGl3 imGuiGl3 = new ImGuiImplGl3();
+
+        imGuiGlfw.init(windowHandle, true);
+        imGuiGl3.init("#version 330 core");
+
         updateProjection();
         //glOrtho(-WINDOW_WIDTH / 2f, WINDOW_WIDTH / 2f, -WINDOW_HEIGHT / 2f, WINDOW_HEIGHT / 2f, -1, 1);
         glMatrixMode(GL_MODELVIEW);
@@ -83,6 +115,8 @@ public class SpaceApp {
         generatePLanets();
 
         double lastTime = glfwGetTime();
+
+        backgroundShaderID = ShaderUtils.loadShader("galaxy.vert", "galaxy.frag");
 
         while(!glfwWindowShouldClose(windowHandle)){
             double currentTime = glfwGetTime();
@@ -99,10 +133,10 @@ public class SpaceApp {
             if (keys[GLFW_KEY_DOWN] || keys[GLFW_KEY_S]) {
                 lerpCameraY -= CAMERA_SPEED * deltaTime;
             }
-            if (keys[GLFW_KEY_LEFT] || keys[GLFW_KEY_A]) {
+            if ((keys[GLFW_KEY_LEFT] && !menuOpen) || keys[GLFW_KEY_A]) {
                 lerpCameraX -= CAMERA_SPEED * deltaTime;
             }
-            if (keys[GLFW_KEY_RIGHT] || keys[GLFW_KEY_D]) {
+            if ((keys[GLFW_KEY_RIGHT] && !menuOpen) || keys[GLFW_KEY_D]) {
                 lerpCameraX += CAMERA_SPEED * deltaTime;
             }
             if (keys[GLFW_KEY_EQUAL]) {
@@ -111,6 +145,18 @@ public class SpaceApp {
             if (keys[GLFW_KEY_MINUS]) {
                 zoom /= (float) Math.pow(1.01, deltaTime);
             }
+            if(following){
+                if(selectedPlanet != null) {
+                    float screenScale = 1.0f / zoom; // km -> m -> cm (px?)
+                    lerpCameraX = selectedPlanet.getX() / screenScale;
+                    lerpCameraY = selectedPlanet.getY() / screenScale;
+                }
+            }
+
+            if(grabbingPlanet && selectedPlanet != null) {
+
+            }
+
             if(addingPlanetMode && mouseButtons[GLFW_MOUSE_BUTTON_LEFT]) {
                 float worldX = (float)((mouseX - windowWidth/2f) / zoom + cameraX);
                 float worldY = (float)((mouseY - windowHeight/2f) / zoom + cameraY);
@@ -122,11 +168,19 @@ public class SpaceApp {
                 addingPlanetMode = false;
             }
 
+
+            // ImGui Start Frame
+            imGuiGlfw.newFrame();
+            ImGui.newFrame();
+
+
             updateProjection();
 
             glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
             renderGrid();
+            applyShader();
+
 
             for(Planet p : planets){
                 p.render();
@@ -134,6 +188,7 @@ public class SpaceApp {
                 //p.update(deltaTime * timeScale); // example
                 p.update(timeScale);
             }
+            chatBar.update();
 
             // Save current matrices
             glMatrixMode(GL_PROJECTION);
@@ -151,15 +206,23 @@ public class SpaceApp {
 
             // Draw text in screen coordinates (4,4 is top-left corner)
             glColor3f(1f, 1f, 1f);
+
+
+            if (menuOpen) {
+                renderOverlay();
+            }
             Text.drawText(20, 20, "Camera: " + cameraX + ", " + cameraY, 1.0f);
             Text.drawText(20, 40, "Mouse: " + mouseX + ", " + mouseY, 1.0f);
             Text.drawText(20, 60, "Mouse World: " + (mouseX + cameraX) + ", " + (mouseY + cameraY), 1.0f);
-
 
             float arbitraryNumber = 1000f;
             float screenScale = 10f / arbitraryNumber;
 
             Text.drawText(20, 80, "Mouse World2: " + ((mouseX + cameraX) * screenScale) + ", " + ((mouseY + cameraY) * screenScale), 1.0f);
+            Text.drawText(20, 100, "Zoom: " + zoom, 1.0f);
+            float tw = Text.getTextWidth2("Time Scale: " + timeScale, 2f);
+            Text.drawText(windowWidth - 10 - tw, 10, "Time Scale: " + timeScale, 2f);
+
 
             // Restore state
             glDisable(GL_BLEND);
@@ -168,11 +231,12 @@ public class SpaceApp {
             glMatrixMode(GL_PROJECTION);
             glPopMatrix();
             glMatrixMode(GL_MODELVIEW);
-
-            if (menuOpen) {
-                renderOverlay();
-            }
             uiManager.renderAll();
+            chatBar.render(windowWidth, windowHeight);
+
+            // ImGUI After render
+            ImGui.render();
+            imGuiGl3.renderDrawData(ImGui.getDrawData());
 
             glfwSwapBuffers(windowHandle);
             glfwPollEvents();
@@ -229,6 +293,9 @@ public class SpaceApp {
             mouseX = xpos;
             mouseY = ypos;
         });
+        glfwSetCharCallback(windowHandle, (windowHandle, codepoint) -> {
+            chatBar.handleCharInput(codepoint);
+        });
 
         glfwSetMouseButtonCallback(windowHandle, (window, button, action, mods) -> {
             System.out.println("clicked");
@@ -236,41 +303,67 @@ public class SpaceApp {
 
         // Key handler callback
         glfwSetKeyCallback(windowHandle, (window, key, scanCode, action, mods) -> {
-            System.out.println("clacked");
-            if (key == GLFW_KEY_ESCAPE && action == GLFW_PRESS) {
-                glfwSetWindowShouldClose(window, true);
-            }
+            chatBar.handleKeyPress(key, scanCode, action, mods);
             uiManager.handleKeyPress(key, scanCode, action, mods);
 
             if (key >= 0 && key <= GLFW_KEY_LAST) {
                 if (action == GLFW_PRESS) {
-                    keys[key] = true;
+                    if(!chatBar.focused)
+                        keys[key] = true;
                 } else if (action == GLFW_RELEASE) {
                     keys[key] = false;
                 }
             }
-            if (action == GLFW_PRESS || action == GLFW_KEY_DOWN) {
+            if (action == GLFW_PRESS) {
                 switch (key) {
-                    case GLFW_KEY_ESCAPE -> glfwSetWindowShouldClose(window, true);
+                    case GLFW_KEY_PAGE_UP -> timeScale += 0.2f;
+                    case GLFW_KEY_PAGE_DOWN -> timeScale -= 0.2f;
+
+                    case GLFW_KEY_ESCAPE -> {
+                        if (chatBar.focused) {
+                            chatBar.focused = false;
+                        } else {
+                            glfwSetWindowShouldClose(window, true);
+                        }
+                    }
+                }
+                // timeScale = MathHelper.clamp(0.0f, 10.0f, timeScale);
+
+                int mult = (int) Math.pow(10, 2);
+
+                timeScale = (float) Math.round(timeScale * mult) / mult;
+            }
+            if (action == GLFW_PRESS || action == GLFW_KEY_DOWN) {
+
+                switch (key) {
+                    case GLFW_KEY_F -> {
+                        if(chatBar.focused) return;
+                        if(selectedPlanet == null){
+                            chatBar.addToChat(new ChatBar.Message("Select a planet to follow"));
+                            return;
+                        }
+                        following = !following;
+                    }
                     case GLFW_KEY_R -> { // recenter
+                        if(chatBar.focused) return;
                         lerpCameraX = 0f;
                         lerpCameraY = 0f;
                         if(selectedPlanet != null) {
                             float arbitraryNumber = 1000f;
-                            float screenScale = 1000.0f / 100.0f / arbitraryNumber; // km -> m -> cm (px?)
-                            lerpCameraX = selectedPlanet.getX() * screenScale * 2f;
-                            lerpCameraY = selectedPlanet.getY() * screenScale * 2f;
-                            System.out.println(lerpCameraX);
-                            System.out.println(lerpCameraY);
+                            float screenScale = 1.0f / zoom; // km -> m -> cm (px?)
+                            lerpCameraX = selectedPlanet.getX() / screenScale;
+                            lerpCameraY = selectedPlanet.getY() / screenScale;
                         }
                     }
                     case GLFW_KEY_TAB -> {
                         menuOpen = !menuOpen;
                     }
                     case GLFW_KEY_SPACE -> {
+                        if(chatBar.focused) return;
                         if(timeScale == 0.0f) {
-                            timeScale = 1.0f;
+                            timeScale = oldTimeScale;
                         }else{
+                            oldTimeScale = timeScale;
                             timeScale = 0.0f;
                         }
                     }
@@ -298,15 +391,23 @@ public class SpaceApp {
             }
             double[] mouseX = new double[1];
             double[] mouseY = new double[1];
-            uiManager.handleMouseClick(mouseX[0], mouseY[0], button);
             glfwGetCursorPos(window, mouseX, mouseY);
 
+            uiManager.handleMouseClick(mouseX[0], mouseY[0], button);
+            chatBar.handleMouseClick(mouseX[0], mouseY[0], button);
+
+            if(action == GLFW_RELEASE && button == GLFW_MOUSE_BUTTON_LEFT){
+                grabbingPlanet = false;
+            }
+
             if (button == GLFW_MOUSE_BUTTON_LEFT) {
+                if(action == GLFW_RELEASE) return;
+                if(mouseX[0] >= chatBar.getX() && mouseY[0] >= chatBar.getY()) return;
                 Planet closestPlanet = null;
                 float minDistSq = Float.MAX_VALUE;
                 for (Planet p : planets) {
-                    System.out.println("------------------------------");
-                    System.out.println(p.name);
+                    // System.out.println("------------------------------");
+                    // System.out.println(p.name);
 
                     float[] scr = worldToScreen(p.getX(), p.getY());
                     float scrX = scr[0] - cameraX;
@@ -325,11 +426,20 @@ public class SpaceApp {
                     }
 
 
-                    System.out.println("------------------------------");
+                    // System.out.println("------------------------------");
                 }
                 if (closestPlanet != null) {
+                    // check if we're not clicking in the menu
+                    boolean horizontal = mouseX[0] >= currentWindowPos.x && mouseX[0] <= currentWindowPos.x + currentWindowSize.x;
+                    boolean vertical = mouseY[0] >= currentWindowPos.y && mouseY[0] <= currentWindowPos.y + currentWindowSize.y;
+                    if(menuOpen && vertical && horizontal){
+                        chatBar.addToChat(new ChatBar.Message("clicking in menu"));
+                        return;
+                    }
+
                     selectedPlanet = closestPlanet;
-                    System.out.println("Selected closest planet: " + closestPlanet.name + " with distance: " + Math.sqrt(minDistSq));
+                    grabbingPlanet = true;
+                    // System.out.println("Selected closest planet: " + closestPlanet.name + " with distance: " + Math.sqrt(minDistSq));
                 }
             }
         });
@@ -342,6 +452,7 @@ public class SpaceApp {
             glViewport(0, 0, width, height);
             this.windowWidth = width;
             this.windowHeight = height;
+            chatBar.updateDimension(width, height);
             updateProjection();
         });
 
@@ -371,6 +482,10 @@ public class SpaceApp {
             addPlanet(p);
         }
     }
+    public void reset(){
+        planets.clear();
+
+    }
 
     private void updateProjection() {
         glMatrixMode(GL_PROJECTION);
@@ -384,7 +499,7 @@ public class SpaceApp {
                 (cameraY + windowHeight / 2f) / zoom,
                 -1, 1
         );
-        CAMERA_SPEED = .005f / zoom;
+        CAMERA_SPEED = .0017f / zoom;
         glMatrixMode(GL_MODELVIEW);
     }
 
@@ -427,98 +542,69 @@ public class SpaceApp {
     }
 
     private void renderOverlay() {
-        glPushMatrix();
-        glLoadIdentity();
-        glMatrixMode(GL_PROJECTION);
-        glPushMatrix();
-        glLoadIdentity();
-        glOrtho(0, windowWidth, windowHeight, 0, -1, 1);
-
-        // Dark semi-transparent background
-        glEnable(GL_BLEND);
+        /*glEnable(GL_BLEND);
         glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
 
-        glColor4f(0.1f, 0.1f, 0.1f, 0.9f);
-        glBegin(GL_QUADS);
-        glVertex2f(0, 0);
-        glVertex2f(300, 0);
-        glVertex2f(300, windowHeight);
-        glVertex2f(0, windowHeight);
-        glEnd();
+        glColor4f(0.4f, 0.4f, 0.4f, 0.4f);
+        RenderUtil.drawRect(0, 0, 200, windowHeight, true);
 
-        glDisable(GL_BLEND);
-        // Selected Planet Properties
-        if(selectedPlanet != null) {
-            renderPlanetProperties(20, 100);
+        glColor4f(1f, 1f, 1f, 1f);
+
+        if(selectedPlanet == null){
+            Text.drawText(10, 10, "No Planet Selected", 2f);
+        }else{
+            Text.drawText(10, 10, "Name: " + selectedPlanet.name, 2f);
+            Text.drawText(10, 30, "Mass: " + selectedPlanet.mass, 1f);
+            Text.drawText(10, 50, "Radius: " + selectedPlanet.radius, 1f);
+            Text.drawText(10, 70, "Position: " + "(" + selectedPlanet.position[0] + ", " + selectedPlanet.position[1] + ")", 1f);
+            Text.drawText(10, 90, "Velocity: " + "(" + selectedPlanet.velocity[0] + ", " + selectedPlanet.velocity[1] + ")", 1f);
+            Text.drawText(10, 110, "Color: " + "(" + selectedPlanet.color[0] + ", " + selectedPlanet.color[1]  + ", " + selectedPlanet.color[2] + ")", 1f);
         }
 
-        renderAddPlanetControls(20, 400);
+        glDisable(GL_BLEND);
+        glColor3f(1f, 1f, 1f);*/
+        if (menuOpen) {
+            if(selectedPlanet == null){
+                ImGui.begin("Select a planet");
+                this.currentWindowPos = ImGui.getWindowPos();
+                this.currentWindowSize = ImGui.getWindowSize();
+                ImGui.end();
+                return;
+            }
+            ImGui.begin(selectedPlanet.name);
+            this.currentWindowPos = ImGui.getWindowPos();
+            this.currentWindowSize = ImGui.getWindowSize();
 
-        glPopMatrix();
-        glMatrixMode(GL_MODELVIEW);
-        glPopMatrix();
+            float[] mass = { (float) selectedPlanet.mass };
+            float[] radius = { (float) selectedPlanet.radius };
+            ImFloat posX = new ImFloat(selectedPlanet.getX());
+            ImFloat posY = new ImFloat(selectedPlanet.getY());
+
+            if (ImGui.sliderFloat("Mass", mass, 1e3f, 1e9f)) {
+                selectedPlanet.mass = mass[0];
+            }
+            if (ImGui.sliderFloat("Radius", radius, 10f, 5000f)) {
+                selectedPlanet.radius = radius[0];
+            }
+            if (ImGui.inputFloat("X Position", posX)) {
+                selectedPlanet.setX(posX.get());
+            }
+            if (ImGui.inputFloat("Y Position", posY)) {
+                selectedPlanet.setY(posY.get());
+            }
+
+            // Optional: display info
+            ImGui.text("Velocity: " + selectedPlanet.velocity[0] + ", " + selectedPlanet.velocity[1]);
+
+            ImGui.end();
+        }
     }
+
     private boolean isMouseOver(int x, int y, int width, int height) {
         return mouseX >= x && mouseX <= x + width &&
                 mouseY >= y && mouseY <= y + height;
     }
 
-    private void renderPlanetProperties(int x, int y) {
-        // Display selected planet properties
-        drawText(x, y, "Selected Planet: " + selectedPlanet.name);
-        drawText(x, y + 30, "Mass: " + selectedPlanet.mass);
-        drawText(x, y + 60, "Radius: " + selectedPlanet.radius);
-
-        // Add edit buttons and input fields here
-    }
-    private void renderAddPlanetControls(int x, int y) {
-        drawText(x, y, "Add New Planet", 2);
-    }
-
-    private void renderSlider(int x, int y, int width, int height, float value, float min, float max, String label) {
-        float normalized = (value - min) / (max - min);
-        int handleX = (int)(x + normalized * width);
-
-        // Track
-        glColor3f(0.4f, 0.4f, 0.4f);
-        glBegin(GL_QUADS);
-        glVertex2f(x, y);
-        glVertex2f(x + width, y);
-        glVertex2f(x + width, y + height);
-        glVertex2f(x, y + height);
-        glEnd();
-
-        // Handle
-        glColor3f(0.8f, 0.8f, 0.8f);
-        glBegin(GL_QUADS);
-        glVertex2f(handleX - 5, y - 5);
-        glVertex2f(handleX + 5, y - 5);
-        glVertex2f(handleX + 5, y + height + 5);
-        glVertex2f(handleX - 5, y + height + 5);
-        glEnd();
-    }
-    private boolean button(int x, int y, int width, int height, String label) {
-        boolean clicked = false;
-        boolean hover = isMouseOver(x, y, width, height);
-
-        // Button background
-        glColor3f(hover ? 0.6f : 0.4f, 0.4f, 0.4f);
-        glBegin(GL_QUADS);
-        glVertex2f(x, y);
-        glVertex2f(x + width, y);
-        glVertex2f(x + width, y + height);
-        glVertex2f(x, y + height);
-        glEnd();
-
-        // Handle click
-        if(hover && mouseButtons[GLFW_MOUSE_BUTTON_LEFT]) {
-            clicked = true;
-            mouseButtons[GLFW_MOUSE_BUTTON_LEFT] = false; // Consume click
-        }
-
-        drawText(x + 5, y + height/2 + 4, label);
-        return clicked;
-    }
     public float[] worldToScreen(float worldX, float worldY) {
         float screenX = (worldX - cameraX) * zoom + windowWidth / 2f;
         float screenY = (worldY - cameraY) * zoom + windowHeight / 2f;
@@ -544,5 +630,47 @@ public class SpaceApp {
         Planet.setCircularOrbit(planet1, SUN);
         Planet.setCircularOrbit(planet2, SUN);
         addPlanets(planet1, planet2, SUN);
+    }
+
+    public void spawnPlanet(Planet p){
+        p.setSystem(planets);
+        addPlanet(p);
+    }
+
+    public void applyShader() {
+        glMatrixMode(GL_PROJECTION);
+        glPushMatrix();
+        glLoadIdentity();
+        glOrtho(0, windowWidth, windowHeight, 0, -1, 1);
+        glMatrixMode(GL_MODELVIEW);
+        glPushMatrix();
+        glLoadIdentity();
+
+        // glDisable(GL_DEPTH_TEST); // ensure it renders over everything
+
+        glUseProgram(backgroundShaderID);
+
+        float currentTime = (System.nanoTime() - startTime) / 1_000_000_000.0f;
+
+        // Pass uniform values to the shader
+        glUniform1f(glGetUniformLocation(backgroundShaderID, "u_time"), currentTime);
+        glUniform2f(glGetUniformLocation(backgroundShaderID, "u_resolution"), windowWidth, windowHeight);
+        glUniform2f(glGetUniformLocation(backgroundShaderID, "u_camera"), cameraX, cameraY);
+
+        glBegin(GL_QUADS);
+        glVertex2f(0, 0);
+        glVertex2f(windowWidth, 0);
+        glVertex2f(windowWidth, windowHeight);
+        glVertex2f(0, windowHeight);
+        glEnd();
+
+        glUseProgram(0);
+
+        // glEnable(GL_DEPTH_TEST);
+
+        glPopMatrix();
+        glMatrixMode(GL_PROJECTION);
+        glPopMatrix();
+        glMatrixMode(GL_MODELVIEW);
     }
 }

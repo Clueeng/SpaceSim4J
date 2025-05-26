@@ -18,7 +18,7 @@ public class Planet {
 
     ArrayList<Planet> planetSystem;
 
-    public Planet(String name, double mass, float radius, ArrayList<Planet> planetSystem, SpaceApp spaceApp){
+    public Planet(String name, double mass, double radius, ArrayList<Planet> planetSystem, SpaceApp spaceApp){
         this.name = name;
         this.mass = mass;
         this.radius = radius;
@@ -27,7 +27,7 @@ public class Planet {
         this.spaceApp = spaceApp;
     }
 
-    public Planet(String name, double mass, float radius, SpaceApp spaceApp){
+    public Planet(String name, double mass, double radius, SpaceApp spaceApp){
         this.name = name;
         this.mass = mass;
         this.radius = radius;
@@ -74,12 +74,37 @@ public class Planet {
         }
         glEnd();
         glPopMatrix();
+
+        glPushMatrix();
+        glEnable(GL_BLEND);
+        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        glColor4f(color[0], color[1], color[2], 0.4f);
+        glBegin(GL_POLYGON);
+
+        xVert = this.radius * screenScale;
+        yVert = 0;
+
+        for(int i = 0; i < segments; i++) {
+            glVertex2d(xVert + getX(), yVert + getY());
+
+            double tx = -yVert;
+            double ty = xVert;
+
+            xVert += tx * tangentialFactor;
+            yVert += ty * tangentialFactor;
+
+            xVert *= radialFactor;
+            yVert *= radialFactor;
+        }
+        glDisable(GL_BLEND);
+        glColor3f(color[0], color[1], color[2]);
+
+        glEnd();
+        glPopMatrix();
     }
     private void renderName() {
-        // Get screen position of the planet's center
         float[] screenPos = spaceApp.worldToScreen(getX(), getY());
 
-        // Set up orthogonal projection for text
         glMatrixMode(GL_PROJECTION);
         glPushMatrix();
         glLoadIdentity();
@@ -89,18 +114,17 @@ public class Planet {
         glPushMatrix();
         glLoadIdentity();
 
-        // Position text above the circle
         float textScale = 1.0f;
-        float textYOffset = -20; // Pixels above the circle
 
-        glTranslatef(screenPos[0] - spaceApp.cameraX, spaceApp.windowHeight - screenPos[1] + spaceApp.cameraY, 0); // Mirror Y position
-        glScalef(1, 1, 1); // Flip text vertically
 
-        //Text.drawText(screenPos[0], screenPos[1] + textYOffset, name, textScale);
+        float screenScale = 5000; // km -> m -> cm (px?)
+
+        float textYOffset = (float) (-this.radius / screenScale);
+
+        glTranslatef(screenPos[0] - spaceApp.cameraX, spaceApp.windowHeight - screenPos[1] + spaceApp.cameraY, 0);
+        glScalef(1, 1, 1);
 
         Text.drawText(-Text.getTextWidth(name, textScale) / 2f, -textYOffset, name, textScale);
-        String debug = "(" + position[0] + ", " + position[1] + ")";
-        Text.drawText(-Text.getTextWidth(debug, textScale) / 2f, -textYOffset + 24, debug, textScale);
 
         // Restore matrices
         glPopMatrix();
